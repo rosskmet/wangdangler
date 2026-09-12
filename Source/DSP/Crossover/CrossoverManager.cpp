@@ -48,7 +48,6 @@ void CrossoverManager::rebuildFilterChain()
         iirFilters = std::make_unique<IIRFilterBank>(numBands);
         iirFilters->prepare(sampleRate, blockSize);
         iirFilters->setCrossoverFrequencies(crossoverLowFreq, crossoverHighFreq);
-        iirFilters->setOrder(filterOrder);
     }
     else
     {
@@ -162,7 +161,6 @@ void CrossoverManager::setCrossoverFrequency(int band, float frequencyHz)
 
             if (iirFilters)
             {
-                iirFilters->enableSmoothTransitions(true, transitionDuration);
                 iirFilters->setCrossoverFrequencies(crossoverLowFreq,
                                                     crossoverHighFreq);
             }
@@ -210,17 +208,6 @@ void CrossoverManager::setFilterType(FilterType type)
     }
 }
 
-void CrossoverManager::setFilterOrder(int order)
-{
-    if (order != filterOrder)
-    {
-        filterOrder = order;
-        if (iirFilters)
-        {
-            iirFilters->setOrder(order);
-        }
-    }
-}
 
 float CrossoverManager::getCrossoverFrequency(int band) const
 {
