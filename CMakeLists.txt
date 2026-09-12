@@ -52,7 +52,6 @@ target_sources(Wangdangler PRIVATE
     Source/DSP/Crossover/CrossoverManager.cpp
     Source/DSP/Crossover/IIRFilterBank.cpp
     Source/DSP/Crossover/FIRFilterBank.cpp
-    Source/DSP/Crossover/LinkwitzRileyFilters.cpp
     
     Source/DSP/Compressor/MultiBandCompressor.cpp
     Source/DSP/Compressor/DetectionLogic.h
@@ -117,7 +116,6 @@ target_link_libraries(Wangdangler PRIVATE
 )
 
 target_compile_definitions(Wangdangler PUBLIC
-    JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_WEB_BROWSER=0)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release")

@@ -1,240 +1,137 @@
 #include "CrossoverManager.h"
 
-namespace mbsc {
+#include <cmath>
 
-CrossoverManager::CrossoverManager(int numBands)
-    : numBands(numBands)
+namespace mbsc
 {
-    jassert(numBands == 3);  // For this project, we use 3 bands
-    smoothedLowFreq.reset(0.01);  // 10ms smoothing
-    smoothedHighFreq.reset(0.01);
+
+CrossoverManager::CrossoverManager (int numBands)
+    : numBands (numBands)
+{
+    jassert (numBands == 3); // this design is a 3-band topology
 }
 
 CrossoverManager::~CrossoverManager() = default;
 
-void CrossoverManager::prepare(double sampleRate, int blockSize, int numBands)
+void CrossoverManager::prepare (double sampleRate, int blockSize, int numChannels)
 {
-    this->sampleRate = sampleRate;
-    this->blockSize = blockSize;
+    this->sampleRate  = sampleRate;
+    this->blockSize   = blockSize;
+    this->numChannels = numChannels;
 
-    smoothedLowFreq .reset(sampleRate, 0.01);   // 10 ms ramp
-    smoothedHighFreq.reset(sampleRate, 0.01);
-    smoothedLowFreq .setCurrentAndTargetValue(crossoverLowFreq);
-    smoothedHighFreq.setCurrentAndTargetValue(crossoverHighFreq);
-
-    allocateBandBuffers();
     rebuildFilterChain();
-}
-
-void CrossoverManager::allocateBandBuffers()
-{
-    bandBuffers.clear();
-    for (int i = 0; i < numBands; ++i)
-    {
-        juce::AudioBuffer<float> buffer(1, blockSize * 2);  // Extra for lookahead
-        buffer.clear();
-        bandBuffers.push_back(std::move(buffer));
-    }
-}
-
-void CrossoverManager::rebuildFilterChain()
-{
-    // Destroy existing filters
-    iirFilters.reset();
-    firFilters.reset();
-    
-    if (filterType == FilterType::IIR)
-    {
-        iirFilters = std::make_unique<IIRFilterBank>(numBands);
-        iirFilters->prepare(sampleRate, blockSize);
-        iirFilters->setCrossoverFrequencies(crossoverLowFreq, crossoverHighFreq);
-    }
-    else
-    {
-        firFilters = std::make_unique<FIRFilterBank>();
-        firFilters->prepare(sampleRate, blockSize, 2);   // was (sampleRate, blockSize)
-        firFilters->setCrossoverFrequencies(crossoverLowFreq, crossoverHighFreq);
-        firFilters->setTapCount(1024);
-    }
 }
 
 void CrossoverManager::reset()
 {
     if (iirFilters) iirFilters->reset();
     if (firFilters) firFilters->reset();
-    
-    for (auto& buffer : bandBuffers)
-        buffer.clear();
 }
 
-void CrossoverManager::split(juce::AudioBuffer<float>& buffer)
+void CrossoverManager::rebuildFilterChain()
 {
-    // Work with the input buffer directly for efficiency
-    // Copy to band buffers for parallel processing
-    
-    auto numChannels = buffer.getNumChannels();
-    auto numSamples = buffer.getNumSamples();
-    
-    // Ensure band buffers have enough samples
-    for (auto& b : bandBuffers)
-        b.setSize(1, numSamples, true, false, true);
-    
-    if (filterType == FilterType::IIR && iirFilters)
+    if (filterType == FilterType::IIR)
     {
-        iirFilters->split(buffer, bandBuffers);
+        if (! iirFilters)
+            iirFilters = std::make_unique<IIRFilterBank>(); // default ctor — no arg
+
+        iirFilters->prepare (sampleRate, blockSize, numChannels);
+        iirFilters->setCrossoverFrequencies (crossoverLowFreq, crossoverHighFreq);
     }
-    else if (filterType == FilterType::FIR && firFilters)
+    else
     {
-        firFilters->split(buffer, bandBuffers);
+        if (! firFilters)
+            firFilters = std::make_unique<FIRFilterBank>();
+
+        firFilters->prepare (sampleRate, blockSize, numChannels);
+        firFilters->setCrossoverFrequencies (crossoverLowFreq, crossoverHighFreq);
+        firLatencySamples = firFilters->getLatencySamples(); // report REAL latency
     }
 }
 
-void CrossoverManager::split(const juce::AudioBuffer<float>& input,
-                            std::vector<juce::AudioBuffer<float>>& bandBuffers)
+void CrossoverManager::setCrossoverFrequency (int band, float frequencyHz)
 {
-    if (bandBuffers.size() != static_cast<size_t>(numBands))
-        return;
-    
-    if (filterType == FilterType::IIR && iirFilters)
+    if (band == 0)
     {
-        iirFilters->split(input, bandBuffers);
-    }
-    else if (filterType == FilterType::FIR && firFilters)
-    {
-        firFilters->split(input, bandBuffers);
-    }
-}
-
-void CrossoverManager::merge(juce::AudioBuffer<float>& buffer)
-{
-    // Sum all band buffers back into the main buffer
-    
-    if (filterType == FilterType::IIR && iirFilters)
-    {
-        iirFilters->merge(bandBuffers, buffer);
-    }
-    else if (filterType == FilterType::FIR && firFilters)
-    {
-        firFilters->merge(bandBuffers, buffer);
-    }
-}
-
-void CrossoverManager::merge(const std::vector<juce::AudioBuffer<float>>& bandBuffers,
-                            juce::AudioBuffer<float>& output)
-{
-    output.clear();
-    
-    for (const auto& band : bandBuffers)
-        output.addFrom(0, 0, band, 0, 0, band.getNumSamples(), 1.0f);
-}
-
-void CrossoverManager::setCrossoverFrequency(int band, float frequencyHz)
-{
-    jassert(band >= 0 && band < numBands - 1);
-
-    bool changed = false;
-
-    if (band == 0 && frequencyHz != crossoverLowFreq)
-    {
-        frequencyHz = juce::jlimit(MIN_CROSSOVER_FREQ,
-                                   juce::jmax(MIN_CROSSOVER_FREQ,
-                                              crossoverHighFreq - 100.0f),
-                                   frequencyHz);
+        // Clamp below the high boundary (keeps bands non-overlapping)
+        frequencyHz = juce::jlimit (MIN_CROSSOVER_FREQ,
+                                    juce::jmax (MIN_CROSSOVER_FREQ, crossoverHighFreq - 100.0f),
+                                    frequencyHz);
+        if (std::abs (frequencyHz - crossoverLowFreq) < 0.01f)
+            return;
         crossoverLowFreq = frequencyHz;
-        changed = true;
     }
-    else if (band == 1 && frequencyHz != crossoverHighFreq)
+    else if (band == 1)
     {
-        frequencyHz = juce::jlimit(juce::jmin(MAX_CROSSOVER_FREQ,
-                                              crossoverLowFreq + 100.0f),
-                                   MAX_CROSSOVER_FREQ,
-                                   frequencyHz);
+        frequencyHz = juce::jlimit (juce::jmin (MAX_CROSSOVER_FREQ, crossoverLowFreq + 100.0f),
+                                    MAX_CROSSOVER_FREQ,
+                                    frequencyHz);
+        if (std::abs (frequencyHz - crossoverHighFreq) < 0.01f)
+            return;
         crossoverHighFreq = frequencyHz;
-        changed = true;
     }
-
-    if (changed)
+    else
     {
-        if (useSmoothTransitions)
-        {
-            applySmoothing(crossoverLowFreq, crossoverHighFreq);
-
-            if (iirFilters)
-            {
-                iirFilters->setCrossoverFrequencies(crossoverLowFreq,
-                                                    crossoverHighFreq);
-            }
-        }
-        else
-        {
-            // Immediate change (may click on large jumps)
-            if (iirFilters)
-                iirFilters->setCrossoverFrequencies(crossoverLowFreq,
-                                                    crossoverHighFreq);
-            if (firFilters)
-                firFilters->setCrossoverFrequencies(crossoverLowFreq,
-                                                    crossoverHighFreq);
-        }
+        jassertfalse;
+        return;
     }
+
+    // Push to whichever banks exist; the active one glides over ~10 ms.
+    if (iirFilters)
+        iirFilters->setCrossoverFrequencies (crossoverLowFreq, crossoverHighFreq);
+    if (firFilters)
+        firFilters->setCrossoverFrequencies (crossoverLowFreq, crossoverHighFreq);
 }
 
-void CrossoverManager::applySmoothing(float newFreqLow, float newFreqHigh)
+void CrossoverManager::setFilterType (FilterType type)
 {
-    // Gradually transition filter coefficients to prevent clicks.
-    // setCurrentAndTargetValue: snap the smoother to the new boundary
-    // NOW and aim for it over the configured ramp — the IIRFilterBank
-    // re-derives coefficients per-block via applySmoothedFrequencies(),
-    // so the glide happens there, not here.
-    smoothedLowFreq .setCurrentAndTargetValue(newFreqLow);
-    smoothedHighFreq.setCurrentAndTargetValue(newFreqHigh);
+    if (filterType == type)
+        return;
+
+    filterType = type;
+    rebuildFilterChain(); // new bank gets current freqs in rebuild
 }
 
-void CrossoverManager::setFilterType(FilterType type)
+void CrossoverManager::setFilterOrder (int order)
 {
-    if (filterType != type)
-    {
-        filterType = type;
-        rebuildFilterChain();
-        
-        // Preserve current crossover frequencies
-        if (type == FilterType::IIR && iirFilters)
-        {
-            iirFilters->setCrossoverFrequencies(crossoverLowFreq, crossoverHighFreq);
-        }
-        else if (type == FilterType::FIR && firFilters)
-        {
-            firFilters->setCrossoverFrequencies(crossoverLowFreq, crossoverHighFreq);
-        }
-    }
+    filterOrder = order;   // stored; LR4 is the only implemented order for now
 }
 
-
-float CrossoverManager::getCrossoverFrequency(int band) const
+void CrossoverManager::split (const juce::AudioBuffer<float>& input,
+                              std::vector<juce::AudioBuffer<float>>& bandBuffers)
 {
-    if (band == 0) return crossoverLowFreq;
-    if (band == 1) return crossoverHighFreq;
-    return 0.0f;
+    if (filterType == FilterType::IIR && iirFilters)
+        iirFilters->split (input, bandBuffers);
+    else if (filterType == FilterType::FIR && firFilters)
+        firFilters->split (input, bandBuffers);
+    else
+        jassertfalse; // no bank prepared — check prepare() was called
 }
 
-juce::AudioBuffer<float>& CrossoverManager::getBandBuffer(int band)
+void CrossoverManager::merge (const std::vector<juce::AudioBuffer<float>>& bandBuffers,
+                              juce::AudioBuffer<float>& output)
 {
-    jassert(band >= 0 && band < numBands);
-    return bandBuffers[band];
+    // Deliberately NOT delegated to the banks: doing it here once, per
+    // channel, covers both filter types with identical, stereo-correct
+    // code. (Historical note: the old manager summed all bands into
+    // channel 0 — that mono-collapse bug dies here.)
+    output.clear();
+    const int numSamples = output.getNumSamples();
+
+    for (const auto& band : bandBuffers)
+        for (int ch = 0; ch < output.getNumChannels(); ++ch)
+            if (ch < band.getNumChannels())
+                output.addFrom (ch, 0, band, ch, 0, numSamples);
 }
 
-const juce::AudioBuffer<float>& CrossoverManager::getBandBuffer(int band) const
+float CrossoverManager::getCrossoverFrequency (int band) const
 {
-    jassert(band >= 0 && band < numBands);
-    return bandBuffers[band];
+    return (band == 0) ? crossoverLowFreq : crossoverHighFreq;
 }
 
 int CrossoverManager::getLatencySamples() const
 {
-    if (filterType == FilterType::FIR)
-    {
-        return firLatencySamples;
-    }
-    return 0;  // IIR has negligible latency for this application
+    return (filterType == FilterType::FIR) ? firLatencySamples : 0;
 }
 
 } // namespace mbsc
