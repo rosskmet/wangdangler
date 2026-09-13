@@ -1,5 +1,6 @@
 #include "IIRFilterBank.h"
 #include "CrossoverManager.h"
+#include "DSPConstants.h"
 
 namespace mbsc {
 

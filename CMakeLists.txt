@@ -116,6 +116,8 @@ target_link_libraries(Wangdangler PRIVATE
 )
 
 target_compile_definitions(Wangdangler PUBLIC
+    JUCE_VST3_CAN_REPLACE_VST2=0
+    JUCE_IGNORE_VST3_MISMATCHED_PARAMETER_ID_WARNING=1
     JUCE_WEB_BROWSER=0)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release")

@@ -4,6 +4,8 @@
 #include <vector>
 #include <array>
 
+#include "DSPConstants.h"
+
 namespace mbsc {
 
 /**

@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>
 
+#include "DSPConstants.h"
 #include "IIRFilterBank.h"
 #include "FIRFilterBank.h"
 

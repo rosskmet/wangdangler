@@ -35,7 +35,7 @@ void CrossoverManager::rebuildFilterChain()
         if (! iirFilters)
             iirFilters = std::make_unique<IIRFilterBank>(); // default ctor — no arg
 
-        iirFilters->prepare (sampleRate, blockSize, numChannels);
+        iirFilters->prepare (sampleRate, blockSize);
         iirFilters->setCrossoverFrequencies (crossoverLowFreq, crossoverHighFreq);
     }
     else
